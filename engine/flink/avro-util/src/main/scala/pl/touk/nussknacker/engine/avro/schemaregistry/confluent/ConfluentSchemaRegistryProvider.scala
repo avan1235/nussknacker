@@ -6,22 +6,21 @@ import org.apache.avro.Schema
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
 import pl.touk.nussknacker.engine.avro.schemaregistry.{SchemaRegistryError, SchemaRegistryProvider, SchemaRegistryUnsupportedTypeError}
 import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.client.{CachedConfluentSchemaRegistryClientFactory, ConfluentSchemaRegistryClient, ConfluentSchemaRegistryClientFactory}
-import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.formatter.ConfluentAvroToJsonFormatter
-import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.serialization.jsonpayload.{ConfluentJsonPayloadDeserializerFactory, ConfluentJsonPayloadSerializerFactory}
-import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.serialization.{ConfluentAvroSerializationSchemaFactory, ConfluentKafkaAvroDeserializationSchemaFactory}
+import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.formatter.ConfluentAvroToJsonFormatterFactory
+import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.serialization.jsonpayload.{ConfluentJsonPayloadSerializerFactory, ConfluentKeyValueKafkaJsonDeserializerFactory}
+import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.serialization.{ConfluentAvroSerializationSchemaFactory, ConfluentKeyValueKafkaAvroDeserializationFactory}
 import pl.touk.nussknacker.engine.avro.serialization.{KafkaAvroDeserializationSchemaFactory, KafkaAvroSerializationSchemaFactory}
-import pl.touk.nussknacker.engine.kafka.{KafkaConfig, RecordFormatter}
+import pl.touk.nussknacker.engine.kafka.{KafkaConfig, RecordFormatterFactory}
 
 class ConfluentSchemaRegistryProvider(schemaRegistryClientFactory: ConfluentSchemaRegistryClientFactory,
                                       val serializationSchemaFactory: KafkaAvroSerializationSchemaFactory,
                                       _deserializationSchemaFactory: Boolean => KafkaAvroDeserializationSchemaFactory,
-                                      kafkaConfig: KafkaConfig,
-                                      formatKey: Boolean) extends SchemaRegistryProvider {
+                                      kafkaConfig: KafkaConfig) extends SchemaRegistryProvider {
 
   override def deserializationSchemaFactory(useStringAsKey: Boolean): KafkaAvroDeserializationSchemaFactory = _deserializationSchemaFactory(useStringAsKey)
 
-  override def recordFormatter: RecordFormatter =
-    ConfluentAvroToJsonFormatter(schemaRegistryClientFactory, kafkaConfig, formatKey)
+  override def recordFormatterFactory: RecordFormatterFactory =
+    new ConfluentAvroToJsonFormatterFactory(schemaRegistryClientFactory, kafkaConfig)
 
   override def createSchemaRegistryClient: ConfluentSchemaRegistryClient =
     schemaRegistryClientFactory.createSchemaRegistryClient(kafkaConfig)
@@ -44,41 +43,40 @@ object ConfluentSchemaRegistryProvider extends Serializable {
   def apply(schemaRegistryClientFactory: ConfluentSchemaRegistryClientFactory, processObjectDependencies: ProcessObjectDependencies): ConfluentSchemaRegistryProvider =
     avroPayload(
       schemaRegistryClientFactory,
-      processObjectDependencies,
-      formatKey = false
+      processObjectDependencies
     )
 
   def avroPayload(schemaRegistryClientFactory: ConfluentSchemaRegistryClientFactory,
-                  processObjectDependencies: ProcessObjectDependencies,
-                  formatKey: Boolean): ConfluentSchemaRegistryProvider = {
+                  processObjectDependencies: ProcessObjectDependencies): ConfluentSchemaRegistryProvider = {
     ConfluentSchemaRegistryProvider(
       schemaRegistryClientFactory,
       new ConfluentAvroSerializationSchemaFactory(schemaRegistryClientFactory),
-      (useStringAsKey: Boolean) => new ConfluentKafkaAvroDeserializationSchemaFactory(schemaRegistryClientFactory, useStringAsKey),
-      processObjectDependencies,
-      formatKey)
+      (useStringAsKey: Boolean) => new ConfluentKeyValueKafkaAvroDeserializationFactory(schemaRegistryClientFactory, useStringAsKey),
+      processObjectDependencies
+    )
   }
 
   def apply(schemaRegistryClientFactory: ConfluentSchemaRegistryClientFactory,
             serializationSchemaFactory: KafkaAvroSerializationSchemaFactory,
             deserializationSchemaFactory: Boolean => KafkaAvroDeserializationSchemaFactory,
-            processObjectDependencies: ProcessObjectDependencies,
-            formatKey: Boolean): ConfluentSchemaRegistryProvider = {
+            processObjectDependencies: ProcessObjectDependencies): ConfluentSchemaRegistryProvider = {
     val kafkaConfig = KafkaConfig.parseConfig(processObjectDependencies.config)
     new ConfluentSchemaRegistryProvider(
       schemaRegistryClientFactory,
       serializationSchemaFactory,
       deserializationSchemaFactory,
-      kafkaConfig,
-      formatKey)
+      kafkaConfig
+    )
   }
 
   def jsonPayload(schemaRegistryClientFactory: ConfluentSchemaRegistryClientFactory,
                   processObjectDependencies: ProcessObjectDependencies,
-                  formatKey: Boolean): ConfluentSchemaRegistryProvider = ConfluentSchemaRegistryProvider(schemaRegistryClientFactory,
-    new ConfluentJsonPayloadSerializerFactory(schemaRegistryClientFactory),
-    (useStringAsKey: Boolean) => new ConfluentJsonPayloadDeserializerFactory(schemaRegistryClientFactory, useStringAsKey),
-    processObjectDependencies,
-    formatKey)
-
+                  formatKey: Boolean): ConfluentSchemaRegistryProvider = {
+    ConfluentSchemaRegistryProvider(
+      schemaRegistryClientFactory,
+      new ConfluentJsonPayloadSerializerFactory(schemaRegistryClientFactory),
+      (useStringAsKey: Boolean) => new ConfluentKeyValueKafkaJsonDeserializerFactory(schemaRegistryClientFactory, useStringAsKey),
+      processObjectDependencies
+    )
+  }
 }

@@ -1,7 +1,6 @@
 package pl.touk.nussknacker.engine.avro.helpers
 
 import com.typesafe.scalalogging.LazyLogging
-import io.confluent.kafka.serializers.KafkaAvroSerializer
 import org.apache.flink.api.common.ExecutionConfig
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.scalatest.{FunSuite, Matchers}
@@ -16,7 +15,7 @@ import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.client.Confluent
 import pl.touk.nussknacker.engine.avro.schemaregistry.{ExistingSchemaVersion, LatestSchemaVersion, SchemaVersionOption}
 import pl.touk.nussknacker.engine.avro.sink.KafkaAvroSinkFactory
 import pl.touk.nussknacker.engine.avro.source.KafkaAvroSourceFactory
-import pl.touk.nussknacker.engine.build.EspProcessBuilder
+import pl.touk.nussknacker.engine.build.{EspProcessBuilder, GraphBuilder}
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
 import pl.touk.nussknacker.engine.graph.{EspProcess, expression}
 import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
@@ -29,8 +28,6 @@ import pl.touk.nussknacker.test.{NussknackerAssertions, PatientScalaFutures}
 trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations with FlinkSpec with SchemaRegistryMixin with Matchers with LazyLogging with NussknackerAssertions with PatientScalaFutures {
 
   import spel.Implicits._
-
-  import collection.JavaConverters._
 
   protected var registrar: FlinkProcessRegistrar = _
 
@@ -54,14 +51,8 @@ trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations
 
   protected lazy val nodeId: NodeId = NodeId("mock-node-id")
 
-  protected lazy val keySerializer: KafkaAvroSerializer = {
-    val serializer = new KafkaAvroSerializer(schemaRegistryClient)
-    serializer.configure(Map[String, AnyRef]("schema.registry.url" -> "not_used").asJava, true)
-    serializer
-  }
-
-  protected lazy val avroSourceFactory: KafkaAvroSourceFactory[Any] = {
-    new KafkaAvroSourceFactory[Any](schemaRegistryProvider, testProcessObjectDependencies, None, useStringAsKey = true)
+  protected def avroSourceFactory(useStringAsKey: Boolean): KafkaAvroSourceFactory[Any, Any] = {
+    new KafkaAvroSourceFactory[Any, Any](schemaRegistryProvider, testProcessObjectDependencies, None, useStringAsKey)
   }
 
   protected lazy val avroSinkFactory: KafkaAvroSinkFactory = {
@@ -74,6 +65,7 @@ trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations
     import spel.Implicits._
     val sourceParams = List(TopicParamName -> asSpelExpression(s"'${source.topic}'")) ++ (source match {
       case GenericSourceAvroParam(_, version) => List(SchemaVersionParamName -> asSpelExpression(formatVersionParam(version)))
+      case GenericSourceWithKeySupportAvroParam(_, version) => List(SchemaVersionParamName -> asSpelExpression(formatVersionParam(version)))
       case SpecificSourceAvroParam(_) => List.empty
     })
 
@@ -99,11 +91,15 @@ trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations
       .map(filter => builder.filter("filter", filter))
       .getOrElse(builder)
 
-    filteredBuilder.emptySink(
-      "end",
-      sink.sinkId,
-      baseSinkParams ++ validationParams ++ sink.valueParams: _*
-    )
+    filteredBuilder
+      .split("split",
+        GraphBuilder.emptySink(
+          "end",
+          sink.sinkId,
+          baseSinkParams ++ validationParams ++ sink.valueParams: _*
+        ),
+        GraphBuilder.sink("outputInputMeta", "#inputMeta", "sinkForInputMeta")
+      )
   }
 
   protected def formatVersionParam(versionOption: SchemaVersionOption): String =
@@ -147,6 +143,10 @@ trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations
     override def sourceType: String = "kafka-avro-specific"
   }
 
+  case class GenericSourceWithKeySupportAvroParam(topic: String, versionOption: SchemaVersionOption) extends SourceAvroParam {
+    override def sourceType: String = "kafka-avro-key-value"
+  }
+
   object SourceAvroParam {
 
     def forGeneric(topicConfig: TopicConfig, versionOption: SchemaVersionOption): SourceAvroParam =
@@ -154,6 +154,9 @@ trait KafkaAvroSpecMixin extends FunSuite with KafkaWithSchemaRegistryOperations
 
     def forSpecific(topicConfig: TopicConfig): SourceAvroParam =
       SpecificSourceAvroParam(topicConfig.input)
+
+    def forGenericWithKeySchemaSupport(topicConfig: TopicConfig, versionOption: SchemaVersionOption): SourceAvroParam =
+      GenericSourceWithKeySupportAvroParam(topicConfig.input, versionOption)
 
   }
 

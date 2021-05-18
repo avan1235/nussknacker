@@ -1,19 +1,21 @@
 package pl.touk.nussknacker.engine.management.sample
 
-import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 
 import com.typesafe.config.Config
 import io.circe.Encoder
+import net.ceedubs.ficus.Ficus._
 import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.streaming.api.scala._
 import pl.touk.nussknacker.engine.api._
 import pl.touk.nussknacker.engine.api.definition.{FixedExpressionValue, FixedValuesParameterEditor, MandatoryParameterValidator, StringParameterEditor}
 import pl.touk.nussknacker.engine.api.exception.ExceptionHandlerFactory
 import pl.touk.nussknacker.engine.api.process._
+import pl.touk.nussknacker.engine.avro.schemaregistry.SchemaRegistryProvider
 import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.ConfluentSchemaRegistryProvider
 import pl.touk.nussknacker.engine.avro.schemaregistry.confluent.client.{CachedConfluentSchemaRegistryClientFactory, ConfluentSchemaRegistryClientFactory, MockConfluentSchemaRegistryClientFactory, MockSchemaRegistryClient}
 import pl.touk.nussknacker.engine.avro.sink.KafkaAvroSinkFactoryWithEditor
+import pl.touk.nussknacker.engine.avro.source.KafkaAvroSourceFactory
 import pl.touk.nussknacker.engine.flink.api.process._
 import pl.touk.nussknacker.engine.flink.util.exception.BrieflyLoggingExceptionHandler
 import pl.touk.nussknacker.engine.flink.util.sink.EmptySink
@@ -21,7 +23,8 @@ import pl.touk.nussknacker.engine.flink.util.transformer.aggregate.AggregateHelp
 import pl.touk.nussknacker.engine.flink.util.transformer.aggregate.sampleTransformers.SlidingAggregateTransformerV2
 import pl.touk.nussknacker.engine.flink.util.transformer.outer.OuterJoinTransformer
 import pl.touk.nussknacker.engine.flink.util.transformer.{TransformStateTransformer, UnionTransformer, UnionWithMemoTransformer}
-import pl.touk.nussknacker.engine.kafka.{KafkaConfig, RecordFormatter}
+import pl.touk.nussknacker.engine.kafka.KafkaConfig
+import pl.touk.nussknacker.engine.kafka.consumerrecord.{ConsumerRecordToJsonFormatterFactory, FixedValueDeserializationSchemaFactory}
 import pl.touk.nussknacker.engine.kafka.serialization.schemas.SimpleSerializationSchema
 import pl.touk.nussknacker.engine.kafka.sink.KafkaSinkFactory
 import pl.touk.nussknacker.engine.kafka.source.KafkaSourceFactory
@@ -34,9 +37,6 @@ import pl.touk.nussknacker.engine.management.sample.signal.{RemoveLockProcessSig
 import pl.touk.nussknacker.engine.management.sample.source._
 import pl.touk.nussknacker.engine.management.sample.transformer._
 import pl.touk.nussknacker.engine.util.LoggingListener
-import net.ceedubs.ficus.Ficus._
-import org.apache.flink.streaming.connectors.kafka.KafkaDeserializationSchema
-import pl.touk.nussknacker.engine.kafka.consumerrecord.{ConsumerRecordToJsonFormatter, ConsumerRecordToJsonFormatterFactory, FixedValueDeserializationSchemaFactory}
 
 object DevProcessConfigCreator {
   val oneElementValue = "One element"
@@ -61,32 +61,42 @@ class DevProcessConfigCreator extends ProcessConfigCreator {
   private def kafkaConfig(config: Config) = KafkaConfig.parseConfig(config)
 
   override def sinkFactories(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[SinkFactory]] = {
-    val mockConfluent = processObjectDependencies.config.getAs[Boolean](DevProcessConfigCreator.emptyMockedSchemaRegistryProperty).contains(true)
-    val confluentFactory: ConfluentSchemaRegistryClientFactory = if (mockConfluent) {
-      new MockConfluentSchemaRegistryClientFactory(new MockSchemaRegistryClient)
-    } else CachedConfluentSchemaRegistryClientFactory()
-
+    val schemaRegistryProvider = createSchemaRegistryProvider(processObjectDependencies)
     Map(
       "sendSms" -> all(SinkFactory.noParam(EmptySink)),
       "monitor" -> categories(SinkFactory.noParam(EmptySink)),
       "communicationSink" -> categories(DynamicParametersSink),
       "kafka-string" -> all(new KafkaSinkFactory(new SimpleSerializationSchema[Any](_, String.valueOf), processObjectDependencies)),
-      "kafka-avro" -> all(new KafkaAvroSinkFactoryWithEditor(ConfluentSchemaRegistryProvider(confluentFactory, processObjectDependencies), processObjectDependencies))
+      "kafka-avro" -> all(new KafkaAvroSinkFactoryWithEditor(schemaRegistryProvider, processObjectDependencies))
     )
   }
 
   override def listeners(processObjectDependencies: ProcessObjectDependencies) = List(LoggingListener)
 
-  override def sourceFactories(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[SourceFactory[_]]] = Map(
-    "real-kafka" -> all(simpleStringValueKafkaSource(processObjectDependencies)),
-    "kafka-transaction" -> all(FlinkSourceFactory.noParam(new NoEndingSource)),
-    "boundedSource" -> categories(BoundedSource),
-    "oneSource" -> categories(FlinkSourceFactory.noParam(new OneSource)),
-    "communicationSource" -> categories(DynamicParametersSource),
-    "csv-source" -> categories(FlinkSourceFactory.noParam(new CsvSource)),
-    "genericSourceWithCustomVariables" -> categories(GenericSourceWithCustomVariablesSample),
-    "sql-source" -> categories(SqlSource)
-  )
+  override def sourceFactories(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[SourceFactory[_]]] = {
+    val schemaRegistryProvider = createSchemaRegistryProvider(processObjectDependencies)
+    val avroSourceFactory = new KafkaAvroSourceFactory[Any, Any](schemaRegistryProvider, processObjectDependencies, None, useStringAsKey = true)
+    Map(
+      "real-kafka" -> all(simpleStringValueKafkaSource(processObjectDependencies)),
+      "real-kafka-avro" -> all(avroSourceFactory),
+      "kafka-transaction" -> all(FlinkSourceFactory.noParam(new NoEndingSource)),
+      "boundedSource" -> categories(BoundedSource),
+      "oneSource" -> categories(FlinkSourceFactory.noParam(new OneSource)),
+      "communicationSource" -> categories(DynamicParametersSource),
+      "csv-source" -> categories(FlinkSourceFactory.noParam(new CsvSource)),
+      "genericSourceWithCustomVariables" -> categories(GenericSourceWithCustomVariablesSample),
+      "sql-source" -> categories(SqlSource)
+    )
+  }
+
+  private def createSchemaRegistryProvider(processObjectDependencies: ProcessObjectDependencies): SchemaRegistryProvider = {
+    val mockConfluent = processObjectDependencies.config.getAs[Boolean](DevProcessConfigCreator.emptyMockedSchemaRegistryProperty).contains(true)
+    val confluentFactory: ConfluentSchemaRegistryClientFactory = if (mockConfluent) {
+      new MockConfluentSchemaRegistryClientFactory(new MockSchemaRegistryClient)
+    } else CachedConfluentSchemaRegistryClientFactory()
+
+    ConfluentSchemaRegistryProvider(confluentFactory, processObjectDependencies)
+  }
 
   override def services(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[Service]] = Map(
     "accountService" -> categories(EmptyService).withNodeConfig(SingleNodeConfig.zero.copy(docsUrl = Some("accountServiceDocs"))),
