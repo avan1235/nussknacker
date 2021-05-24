@@ -22,6 +22,7 @@ import pl.touk.nussknacker.processCounts.{CountsReporter, CountsReporterCreator}
 import pl.touk.nussknacker.restmodel.validation.CustomProcessValidator
 import pl.touk.nussknacker.ui.NusskanckerDefaultAppRouter.logger
 import pl.touk.nussknacker.ui.api._
+import pl.touk.nussknacker.ui.config.processtoolbars.{ProcessAndSubprocessToolbarsConfig, ToolbarsConfigProvider}
 import pl.touk.nussknacker.ui.config.{AnalyticsConfig, ConfigWithDefaults, FeatureTogglesConfig}
 import pl.touk.nussknacker.ui.db.{DatabaseInitializer, DatabaseServer, DbConfig}
 import pl.touk.nussknacker.ui.initialization.Initialization
@@ -75,6 +76,9 @@ trait NusskanckerDefaultAppRouter extends NusskanckerAppRouter {
     val environment = config.getString("environment")
     val featureTogglesConfig = FeatureTogglesConfig.create(config)
     logger.info(s"Ui config loaded: \nfeatureTogglesConfig: $featureTogglesConfig")
+
+    val processAndSubprocessToolbarsConfig = ProcessAndSubprocessToolbarsConfig.create(config)
+    val toolbarsConfigProvider = new ToolbarsConfigProvider(processAndSubprocessToolbarsConfig)
 
     val (typeToConfig, reload) = prepareProcessingTypeData(config)
 
@@ -171,7 +175,13 @@ trait NusskanckerDefaultAppRouter extends NusskanckerAppRouter {
 
     //TODO: WARNING now all settings are available for not sign in user. In future we should show only basic settings
     val apiResourcesWithoutAuthentication: List[Route] = List(
-      new SettingsResources(featureTogglesConfig, typeToConfig, authenticator.config, analyticsConfig).publicRoute(),
+      new SettingsResources(
+        processRepository = processRepository,
+        featureTogglesConfig = featureTogglesConfig,
+        typeToConfig = typeToConfig,
+        authenticationConfig = authenticator.config,
+        analyticsConfig = analyticsConfig,
+        toolbarsConfigProvider = toolbarsConfigProvider).publicRoute(),
       appResources.publicRoute()
     ) ++ authenticator.routes
 
