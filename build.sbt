@@ -914,7 +914,8 @@ lazy val httpUtils = (project in engine("httpUtils")).
         "com.typesafe.scala-logging" %% "scala-logging" % scalaLoggingV,
         "com.softwaremill.sttp.client" %% "core" % sttpV,
         "com.softwaremill.sttp.client" %% "async-http-client-backend-future" % sttpV,
-        "com.softwaremill.sttp.client" %% "circe" % sttpV
+        "com.softwaremill.sttp.client" %% "circe" % sttpV,
+        "com.softwaremill.sttp.client" %% "akka-http-backend" % sttpV,
       )
     }
   ).dependsOn(api, testUtil % "test")
@@ -1005,7 +1006,6 @@ lazy val ui = (project in file("ui/server"))
         "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpV % "test",
         "com.typesafe.akka" %% "akka-testkit" % akkaV % "test",
         "de.heikoseeberger" %% "akka-http-circe" % akkaHttpCirceV,
-        "com.softwaremill.sttp.client" %% "akka-http-backend" % sttpV,
 
         "ch.qos.logback" % "logback-core" % logbackV,
         "ch.qos.logback" % "logback-classic" % logbackV,

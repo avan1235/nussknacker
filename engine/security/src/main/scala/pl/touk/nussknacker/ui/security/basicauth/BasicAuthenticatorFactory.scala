@@ -6,9 +6,11 @@ import com.typesafe.config.Config
 import pl.touk.nussknacker.ui.security.api.AuthenticatorFactory.{AuthenticatorData, LoggedUserAuth}
 import pl.touk.nussknacker.ui.security.api.{AuthenticatorFactory, DefaultAuthenticationConfiguration}
 
+import scala.concurrent.ExecutionContext
+
 class BasicAuthenticatorFactory extends AuthenticatorFactory with Directives {
 
-  override def createAuthenticator(config: Config, classLoader: ClassLoader, allCategories: List[String]): AuthenticatorData = {
+  override def createAuthenticator(config: Config, classLoader: ClassLoader, allCategories: List[String])(implicit ec: ExecutionContext): AuthenticatorData = {
     val configuration = DefaultAuthenticationConfiguration.create(config)
     AuthenticatorData(createDirective(configuration, allCategories), configuration)
   }
